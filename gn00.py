@@ -113,7 +113,7 @@ class TechOtaku:
 
 if __name__ == "__main__":
     gn00 = TechOtaku()
-    gn00.login("轻舟过", "a062a2e14ad4e26257b33ffce5175837")
+    gn00.login("轻舟过", "XXXX")
     gn00.get_forum_page([827, 830, 831, 828, 829, 835])
     #gn00.post_reply('830', '85577', 'WZ')
     #gn00.get_candy('45')
