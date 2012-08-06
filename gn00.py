@@ -8,14 +8,60 @@ import collections
 import random
 from bs4 import BeautifulSoup
 import codecs
+from gzip import GzipFile
+from StringIO import StringIO
+import zlib
+import time
+
+def deflate(data):
+    try:
+        return zlib.decompress(data, -zlib.MAX_WBITS)
+    except zlib.error:
+        return zlib.decompress(data)
+
+class ContentEncodingProcessor(urllib2.BaseHandler):
+    def http_request(self, req):
+        req.add_header("Accept-Encoding", "gzip, deflate")
+        return req
+
+    def http_response(self, req, resp):
+        old_resp = resp
+        #gzip
+        if resp.headers.get("content-encoding") == "gzip":
+            gz = GzipFile(
+                fileobj = StringIO(resp.read()),
+                mode = "r"
+                )
+            resp = urllib2.addinfourl(gz, old_resp.headers, old_resp.url, old_resp.code)
+            resp.msg = old_resp.msg
+        #deflate
+        if resp.headers.get("content-encoding") == "deflate":
+            gz = StringIO( deflate(resp.read()) )
+            resp = urllib2.addinfourl(gz, old_resp.headers, old_resp.code)
+            resp.msg = old_resp.msg
+        return resp
+    
 class TechOtaku:
     def __init__(self):
         cj = cookielib.CookieJar()
-        self.opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(cj))
+        encoding_support = ContentEncodingProcessor
+        self.opener = urllib2.build_opener(encoding_support, urllib2.HTTPCookieProcessor(cj))
         urllib2.install_opener(self.opener)
         self.opener.addheaders = [('User-agent', 'IE')]
-        #self.author_set = collections.defaultdict(lambda: 0)
-
+        self.reply_time = time.clock()
+    def _get(self, req, retries = 3):
+        try:
+            response = self.opener.open(req)
+            data = response.read()
+        except Exception, what:
+            print what, req
+            if retries > 0:
+                return self._get(req, retries - 1)
+            else:
+                print 'GET Failed', req
+                return ''
+        return data
+    
     def login(self, username, password):
         url = 'http://www.gn00.com/member.php?mod=logging&action=login&loginsubmit=yes&infloat=yes&lssubmit=yes&inajax=1'
         data = urllib.urlencode({
@@ -26,15 +72,13 @@ class TechOtaku:
         })
         #print data
         req = urllib2.Request(url, data)
-        fd = self.opener.open(req)
-        fd.read()
+        fd = self._get(req)
         
     def post_reply(self, fid, tid, msg):
-        #locked_pattern = re.compile('<div class="locked">')
         template_post_page_url = 'http://www.gn00.com/thread-{0}-1-1.html'
         post_page_url = template_post_page_url.format(tid)
-        post_page = urllib2.urlopen(post_page_url)
-        post_page_unicode = post_page.read().decode('utf-8', 'ignore')
+        post_page = self._get(post_page_url) #urllib2.urlopen(post_page_url)
+        post_page_unicode = post_page.decode('utf-8', 'ignore')
         soup = BeautifulSoup(post_page_unicode)
         post_form = soup.find("form", {'id': 'fastpostform'})
         div_locked = soup.find("div", {"class": "locked"})
@@ -56,8 +100,13 @@ class TechOtaku:
         })
         try:
             req = urllib2.Request(post_url, post_data)
-            fd = self.opener.open(req)
-            print fd.read()
+            cur_time = time.clock()
+            if cur_time - self.reply_time <= 2:
+                time.sleep(2 - cur_time + self.reply_time)
+
+            resp = self._get(req)
+            self.reply_time = time.clock()
+            print resp
             return True
         except:
             return False
@@ -67,9 +116,9 @@ class TechOtaku:
         template_forum_url = 'http://www.gn00.com/forum.php?mod=forumdisplay&fid={0}&filter=author&orderby=dateline&page={1}'
         for i in range(200):
             forum_url = template_forum_url.format(fid, i)
-            forum = urllib2.urlopen(forum_url)
+            forum = self._get(forum_url)#urllib2.urlopen(forum_url)
             pattern = re.compile(u"回帖奖励")
-            forum_unicode = forum.read().decode('utf-8', 'ignore')
+            forum_unicode = forum.decode('utf-8', 'ignore')
             soup = BeautifulSoup(forum_unicode)
             posts = soup.find_all("tbody", {"id": re.compile("thread")})
             for post in posts:
@@ -86,17 +135,17 @@ class TechOtaku:
         f = codecs.open("temp.txt", "w", "utf-8")
         template_forum_url = 'http://www.gn00.com/forum-{0}-{1}.html'
         forum_url = template_forum_url.format(fid, 1)
-        first_page = urllib2.urlopen(forum_url)
+        first_page = self._get(forum_url)#urllib2.urlopen(forum_url)
         pattern = re.compile('<span title="[^\s]+ (\d+) [^\s]+">')
         url_pattern = re.compile('thread-(\d+)')
-        text = first_page.read()
+        text = first_page
         res = pattern.search(text)
         page_num = int(res.group(1))
 
         for i in range(page_num):
             forum_url = template_forum_url.format(fid, i + 1)
-            forum = urllib2.urlopen(forum_url)
-            forum_unicode = forum.read().decode('utf-8', 'ignore')
+            forum = self._get(forum_url)#urllib2.urlopen(forum_url)
+            forum_unicode = forum.decode('utf-8', 'ignore')
             #if i == 0:
             #    print forum_unicode
             soup = BeautifulSoup(forum_unicode)
@@ -142,7 +191,7 @@ if __name__ == "__main__":
     #max_reply_post = None
     replied = 0
     for post in gn00.get_posts_summary(215):
-        if replied > 50:
+        if replied > 20:
             break
         if gn00.post_reply(post['fid'], post['tid'], random.choice(['看看', '戳开'])):
             replied += 1
@@ -153,10 +202,3 @@ if __name__ == "__main__":
     #todaysay	study!
     #fastreply	0
     #http://www.gn00.com/plugin.php?id=dsu_paulsign:sign&operation=qiandao&infloat=1&sign_as=1&inajax=1
-    #for post in gn00.get_posts_summary(45):
-    #    if post['reply_num'] > max_reply:
-    #        max_reply_post = post
-    #        max_reply = post['reply_num']
-    #print max_reply_post
-    #gn00.post_reply('830', '85577', 'WZ')
-    #gn00.get_candy('45')
